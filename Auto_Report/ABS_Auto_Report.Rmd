@@ -1,0 +1,1375 @@
+---
+output: 
+    pdf_document:
+        keep_tex: true
+        fig_caption: true
+header-includes:
+    \usepackage{graphicx}
+    \usepackage{geometry}
+    \geometry{
+        right  = 0.25in,
+        left   = 0.25in,
+        top    = 0.75in,
+        bottom = 0.75in
+    }
+    \usepackage{fancyhdr}
+    \usepackage{lastpage}
+    \usepackage{changepage}
+    \usepackage[default]{lato}
+    \usepackage[none]{hyphenat}
+    \usepackage[T1]{fontenc}
+    \usepackage{color}
+    \usepackage{xcolor}
+    \usepackage{enumitem}
+    \renewcommand*{\familydefault}{\sfdefault}
+    \definecolor{green}{HTML}{00945e}
+---
+\newcommand{\reportcategory}{AUTO ABS-EE}
+\newcommand{\reportdate}{Industry Report January 2017}
+\newcommand{\frontpagenote}{Loan Originations through ; Loan Payments through January 31, 2017}
+
+\fancypagestyle{firstpage}{
+    \setlength{\headheight}{35pt}
+    \newcommand\headline{\rule[.5cm] {12.4cm}{.4pt}\hfill}
+    \newcommand\footline{\hrule height .4pt\hfill}
+    \renewcommand\headrule{\vskip-15px\headline\vskip7px\headline}
+    \renewcommand\footrule{\footline\vskip10px}
+    \renewcommand{\headrulewidth}{3pt}
+    \setlength{\marginparwidth}{5pt}
+    \fancyfoot{}
+    \fancyhead[L]{
+        \large 
+            {\includegraphics[height = 11px]{/Users/nicholasdelzingaro/git_dir/analytical-research/static/Green_Transparent.png}}
+            {\hspace{10px}\fontsize{9pt}{8pt}\selectfont\fontseries{l} {\color{green}{\reportcategory{}}}}
+            \\{\vspace{12px}\fontsize{20pt}{16pt}\selectfont\fontseries{l} \fontsize{20pt}{16pt}{\hspace{5px}\selectfont\fontseries{bx} \reportdate{}}} 
+            \\{\vspace{10px}\fontsize{7pt}{7pt}\selectfont\fontseries{b} \frontpagenote{}}
+    }
+ 
+    \lfoot{\raisebox{16px}{\includegraphics[height = 8px]{/Users/nicholasdelzingaro/git_dir/analytical-research/static/O_black.png}}}
+    \rfoot{\raisebox{15px}{\small{Page \thepage\ of \pageref*{LastPage}}}}
+  
+}
+
+\fancypagestyle{contentpage}{
+    \setlength{\headheight}{20pt}
+    \newcommand\hrulethick{\hrule height .8pt\hfill}
+    \newcommand\hrulethin{\hrule height .4pt\hfill}
+    \renewcommand\headrule{\vskip-16px\hrulethick\vskip20px\hrulethin}
+    \renewcommand\footrule{\hrulethin\vskip3px}
+    \fancyfoot{}
+    \lhead{
+        \raisebox{-12px}{\includegraphics[height = 10px]{/Users/nicholasdelzingaro/git_dir/analytical-research/static/Green_Transparent.png}
+        {\hspace{10px}\fontsize{9pt}{8pt}\selectfont\fontseries{l}} {\color{green}{\reportcategory{}}}}
+    }
+    \rhead{\raisebox{-12px}{\reportdate{}}}
+    \lfoot{\raisebox{2px}{\includegraphics[height = 8px]{/Users/nicholasdelzingaro/git_dir/analytical-research/static/O_black.png}}}
+    \rfoot{\raisebox{1px}{\small{Page \thepage\ of \pageref*{LastPage}}}}
+}
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=10, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE)
+
+options(device = function(file, width, height) {
+  svg(tempfile(), width = width, height = height)
+})
+```
+
+
+```{r setup}
+library(extrafont)
+library(tidyverse)
+library(hrbrthemes)
+library(scales)
+library(lubridate)
+library(pander)
+library(RJDBC)
+library(xlsx)
+library(zoo)
+library(viridis)
+library(ggrepel)
+library(ggjoy)
+library(geofacet)
+library(reshape)
+library(ggplot2)
+library(stringr)
+library(dplyr)
+library(RPostgreSQL)
+library(reshape2)
+library(gganimate)
+library(lava)
+library(knitr)
+library(kableExtra)
+library(quantmod)
+#extrafont::font_import() # May be needed on a new machine
+#extrafont::loadfonts() # May be needed on a new machine
+#devtools::install_github("haozhu233/kableExtra")
+
+
+source('~/db_creds.R')
+
+
+# CHANGE ME
+# This is current month in which the report is written
+report_month = as.Date('2017-12-01')
+report_prev = report_month - months(1)
+report_3m = report_month - months(3)
+report_ytd = report_month - months(13)
+
+###Never change, first month of securitization origination
+first_month = as.Date('2017-01-01')
+num_month = interval(first_month,report_month)%/%months(1)
+
+
+# CHANGE ME
+# This is the first of the month FOLLOWING the last month of originations
+# For example, if originations are through June 2016, this should be '2016-07-01'
+last_month_originations = as.Date('2017-07-01')
+one_year_originations = last_month_originations - months(12)
+
+# Used in subsetting graphs to 12 months
+first_month_originations_to_show  = as.Date('2016-01-01')
+
+first_month_originations_index  = as.Date('2005-01-01')
+last_month_originations_index  = as.Date('2017-09-01')
+
+# TODO: These should all move to a separate package
+export_theme <- theme_ipsum() +
+      theme(text=element_text(family="Lato"),
+            panel.background = element_blank(),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.grid.major.y = element_line(color='#999999'),
+            plot.title = element_text(size=15),
+            axis.title = element_text(size=14),
+            axis.text = element_text(size=12),
+            axis.text.x = element_text(angle = 0, vjust = .5),
+            axis.line = element_blank(),
+            legend.text=element_text(size=12))
+
+palette <- c('#006c91', '#222222', '#848484','#990033', '#ff9900', '#660066', '#8b572a', '#e00e7c', '#4fcbe5', '#8a76d4', '#7ed321', '#d7bf1e', '#5891d4', '#d48758', '#e36e74')
+
+format_si <- function(...) {
+  function(x) {
+    limits <- c(1e-9,  1e-6,  1e-3,  1e0,   1e3,
+                1e6,   1e9,   1e12,  1e15,  1e18,
+                1e21,  1e24)
+    prefix <- c("n",   "µ",   "m",   " ",   "K",
+                "MM",   "B",   "T",   "P",   "E",
+                "Z",   "Y")
+  
+    # Vector with array indices according to position in intervals
+    i <- findInterval(abs(x), limits)
+  
+    # Set prefix to " " for very small values < 1e-24
+    i <- ifelse(i==0, which(limits == 1e0), i)
+
+    paste(format(round(x/limits[i], 1),
+                 trim=TRUE, scientific=FALSE, ...),
+          prefix[i], sep = '')
+  }
+}
+
+
+format_month <- function(...) {
+  function(x) {
+    paste(month(x),"'",substr(year(x), 3, 4), sep = '')
+  }
+}
+
+format_quarter <- function(...) {
+  function(x) {
+    paste('Q', quarter(x)," ",substr(year(x),3,4), sep = '')
+  }
+}
+
+get_state_name <- function(x) {
+  if(x %in% state.abb) {
+    to_return <- tolower(state.name[grep(x, state.abb)])
+  } else if (x %in% state.name) {
+    to_return <- tolower(x)
+  } else if (x == 'DC') {
+    to_return <- 'district of columbia'
+  } else if (x == 'US') {
+    to_return <- 'United States'
+  } else {
+    to_return <- 'Invalid State Name'
+  }
+  to_return
+}
+
+##############Auto Data Functions##################
+###Function to change the 
+origtolong <- function(oname){
+    case_when(
+        oname == "CBS" ~ "CarMax"
+        , oname == "GM FINANCIAL" ~ "AmeriCredit"
+        , oname == "HCA" ~ "Hyundai Auto"
+        , oname == "Mechanics Bank" ~ "California Republic"
+        , oname == "NMAC" ~ "Nissan Auto"
+        , oname == "SC" ~ "Santander Drive Auto"
+        , oname == "TMCC" ~ "Toyota Auto"
+        , oname == "WORLD OMNI FINANCIAL CORP" ~ "World Omni Auto"
+        , oname == "AHFC" ~ "Honda Auto"
+        , TRUE ~ trim(as.character(oname))
+    )
+}
+
+
+delqstatus <- function(status){
+    case_when(
+        status == "[0,30)" ~ "Current"
+        , status == "[30,60)" ~ "30-59 DPD"
+        , status == "[60,90)" ~ "60-89 DPD"
+        , status == "[90,120)" ~ "90-119 DPD"
+        , status == "[120,Inf]" ~ "120 DPD+"
+    )
+}
+
+
+veriftoLong <- function(vercode){
+    case_when(
+        vercode == 1 ~ "1: Not stated, not verified"
+        , vercode == 2 ~ "2: Stated, not verified"
+        , vercode == 3 ~ "3: Stated, verified but not to level 4 or 5"
+        , vercode == 4 ~ "4: Stated, 'level 4' verified: previous year W-2 or tax returns,
+  and year-to-date pay stubs, if salaried.
+    If self-employed, then obligor provided 2 years of tax returns."
+        , vercode == 5 ~ "5: Stated, 'level 5' verified: 24 months income verification 
+  (W-2s, pay stubs, bank statements and/or tax returns). 
+    If self-employed, then obligor provided 2 years tax returns
+        plus a CPA certification of the tax returns."
+    )
+}
+
+carTypes <- function(typcode){
+    case_when(
+          typcode == 1 ~ "Car"
+        , typcode == 2 ~ "Truck"
+        , typcode == 3 ~ "SUV"
+        , typcode == 4 ~ "Motorcycle"
+        , typcode == 98 ~ "Other"
+        , typcode == 99 ~ "Unknown"
+        , is.na(typcode) ~ "Unknown"
+        , TRUE ~ "Unknown"
+    )
+}
+
+carmap <- read.csv('carmatches_legend.csv')
+getGoodCarName <- function(nm){
+    car <- carmap %>% filter(`base` == nm)
+     print(car)
+    car[1,]$goodname
+}
+
+# Month breaks to use in various ggplot graphs
+break_vec_large <- seq(from=first_month_originations_index, to=last_month_originations_index, by="6 months")
+break_vec_small <- seq(from=first_month_originations_index, to=last_month_originations_index, by="12 months")
+```
+
+```{r database_connection}
+# Set up database connection for queries to follow
+drv <- dbDriver("PostgreSQL")
+source("~/devutils/db_creds.R")
+con <- dbConnect(drv, host=analytics_power[['host']], 
+                 port=analytics_power[['port']], dbname=analytics_power[['database']], user=analytics_power[['user']], 
+                 password=analytics_power[['pw']])
+
+```
+
+<!-- CONTENT BEGINS HERE --> 
+
+\thispagestyle{firstpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+&nbsp;
+
+\begin{adjustwidth}{0cm}{6.7cm}
+The Auto Lending  report  provides  a  data-rich  glimpse  into  trends of th Auto data from the ABS-EE data. The SEC passed a rule in 2014 specifying, “offerings of asset-backed securities backed by residential mortgages, commercial mortgages, auto loans, auto leases, and debt securities (including resecuritizations) must comply with asset-level disclosure requirements no later than November 23, 2016." The data has been made public following the start of 2017, over time with the quantity of data, we will conduct more in-depth analysis of the data.
+
+\fontsize{10pt}{12pt}\selectfont\fontseries{l}
+
+Key Insights
+
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+\begin{itemize}[leftmargin=*]
+
+\item The Securtization Details table provides a glimpse of loan characteristics fro each Securitization deal within ABS-EE data as 2017. The table excludes loans that do have a current unpaid balance greater than 0.   
+
+\item The origination characterisitics of the loan data is very diverse by securitization deal. The larger originators of subprime loans are Santander and Americredit with 70\% of their originations in the subprime category. We have categorize subprime as a FICO score below 660 for this analysis. 
+
+
+\end{itemize}
+\end{adjustwidth}
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r query_securitization_1, fig.height=12, fig.width=10}
+# Loan Amount & Principal Remaining by Origination Quarter and Issuer
+sql <- paste0("select abs_name, count(*) as Num_Loans, round(sum(reportingperiodbeginningloanbalanceamount)) as outstanding_balance,
+ round(sum(obligorcreditscore * originalloanamount)/ sum(originalloanamount)) as WAVG_CreditScore, 
+ round(sum(vehiclevalueamount * originalloanamount)/ sum(originalloanamount)) as WAVG_Vehicle_Amt,
+ sum(paymenttoincomepercentage * originalloanamount)/ sum(originalloanamount) as WAVG_PTI,
+ sum(originalinterestratepercentage * reportingperiodbeginningloanbalanceamount)/ sum(reportingperiodbeginningloanbalanceamount) as WAC,
+ round(sum(remainingtermtomaturitynumber * reportingperiodbeginningloanbalanceamount)/ sum(reportingperiodbeginningloanbalanceamount)) as WAM,
+round(sum(originalloanterm * reportingperiodbeginningloanbalanceamount)/ sum(reportingperiodbeginningloanbalanceamount)) as WAVG_TERM
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '", report_month , "' and reportingperiodactualendbalanceamount > 0
+group by abs_name
+")
+res <- dbSendQuery(con, sql)
+origination <- fetch(res, -1)
+origination$wac <- percent(origination$wac)
+origination$wavg_pti <- percent(origination$wavg_pti)
+origination$outstanding_balance <- dollar(origination$outstanding_balance)
+origination$wavg_vehicle_amt <- dollar(origination$wavg_vehicle_amt)
+
+sql <- paste0(" select abs_name, sum(new_vehicles) as new_vehicles, count(*), sum(current_balance) as current_balance, sum(subprime_bal) as subprime_bal, sum(outstanding_balance) as outstanding_balance  from
+(select case when vehiclenewusedcode = '1' then 1 end as new_vehicles, case when currentdelinquencystatus < 30 then reportingperiodbeginningloanbalanceamount end as current_balance,case when obligorcreditscore < 660 then reportingperiodbeginningloanbalanceamount end as subprime_bal, reportingperiodbeginningloanbalanceamount as outstanding_balance,  
+abs_name 
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '", report_month , "' and reportingperiodactualendbalanceamount > 0 ) as num
+group by abs_name")
+
+res <- dbSendQuery(con, sql)
+new_car <- fetch(res, -1)
+new_car$Current<-percent(new_car$current_balance/new_car$outstanding_balance)
+new_car$NEW_CAR_PERCENTAGE<-percent(new_car$new_vehicles/new_car$count)
+new_car$subprime_per<-percent(ifelse(is.na(new_car$subprime_bal/new_car$outstanding_balance)==TRUE,0,new_car$subprime_bal/new_car$outstanding_balance))
+new_car<-new_car[,c("abs_name","NEW_CAR_PERCENTAGE","subprime_per","Current")]
+
+final<-left_join(origination,new_car,by="abs_name")
+final<-final[c("abs_name", "outstanding_balance", "num_loans","Current","wac","wam","wavg_term","wavg_creditscore","wavg_pti","subprime_per","NEW_CAR_PERCENTAGE","wavg_vehicle_amt")]
+names(final) <- c("Deal Name", "UPB", "# Loans","Current Status","WAC","WAM","WAVG TERM","WAVG FICO","WAVG PTI","<660 %","% New Auto","Original Value")
+
+# Theme_Table<-ttheme_default(
+#   core=list( fg_params=list(fontface=3)),
+#    colhead=list(fg_params=list(col='#00945e', fontface=4L)),
+#   rowhead=list(fg_params=list(col='#00945e', fontface=3L)))
+# g<-grid.arrange(tableGrob(final,theme=Theme_Table,rows=NULL))
+#install.packages('kableExtra')
+
+
+ kable(final, format = "latex", booktabs = T, caption = "Securtization Details") %>%
+kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+```{r query_originations}
+# Loan Amount & Principal Remaining by Origination Quarter and Issuer
+sql <- paste0("
+select sum(originalloanamount) as original_balance, originationdate as origination_month, count(*) as count from (select assetnumber, originalloanamount, originationdate,
+row_number() over (partition by assetnumber order by assetnumber, reportingperiodbeginningdate) as row_number
+from abs_auto_loans_test) as rows
+where row_number = 1 and originationdate between '", first_month_originations_to_show ,"' and '", report_month , "'
+group by origination_month
+")
+res <- dbSendQuery(con, sql)
+origination <- fetch(res, -1)
+
+# Loan Amount & Principal Remaining by Origination Quarter and Issuer
+# sql <- paste0("
+# select sum(originalloanamount) as original_balance, originationdate as origination_month, count(*) as count from (select assetnumber, originalloanamount, originationdate,
+# row_number() over (partition by assetnumber order by assetnumber, reportingperiodbeginningdate) as row_number
+# from abs_auto_loans_test) as rows
+# where row_number = 1 and originationdate < '", report_month , "'
+# group by origination_month
+# ")
+# res <- dbSendQuery(con, sql)
+# origination <- fetch(res, -1)
+# write.csv(origination,"/Users/nicholasdelzingaro/origination.csv")
+#origination$remainingpercent <- origination$remaining_balance/origination$loan_amount
+
+# Calculate mom, qoq, and yoy changes, then subset to desired dates
+origination <- origination %>% 
+  mutate(cumulative = cumsum(original_balance),
+         mom = (original_balance / lag(original_balance, 1)) - 1,
+         qoq = (original_balance / lag(original_balance, 4)) - 1,
+         qoq_dol = original_balance - lag(original_balance, 4))
+
+```
+
+
+```{r monthly_originations, include=F}
+p1 <- ggplot(origination) +
+  geom_bar(aes(x = origination_month, y = original_balance), stat = "identity", fill = palette[1]) +
+    scale_x_date(labels = format_month()) +
+  scale_y_continuous(labels=format_si()) +
+    labs(x='Origination Month',
+         y='Auto ABS Origination Amount',
+         title='Monthly Originations') +
+    export_theme + theme(axis.text.x = element_text(angle = 90, vjust = 0))  + theme(legend.position="top",legend.title = element_blank(),legend.text = element_text(size=8, face="bold"))
+
+p1
+
+#ggsave('plots/originations.png', plot = p1, scale = 1, height = 6, width = 10, units = 'in')
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r yoy_change_originations}
+sql <- paste0("
+select sum(originalloanamount) as original_balance, originationdate as origination_month, originatorname, count(*) as count from (select assetnumber, originalloanamount, originationdate, originatorname,
+row_number() over (partition by assetnumber order by assetnumber, reportingperiodbeginningdate) as row_number
+from abs_auto_loans_test) as rows
+where row_number = 1 and originationdate between '", first_month_originations_to_show ,"' and '", report_month , "'
+group by origination_month, originatorname
+")
+res <- dbSendQuery(con, sql)
+origination_orignators <- fetch(res, -1)
+
+origination_orignators$originatorname <- sapply(origination_orignators$originatorname, origtolong)
+datamogrp <- origination_orignators %>%
+    group_by(origination_month, originatorname) %>%
+    summarise(
+        sumamt = sum(original_balance, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(originatorname))
+
+
+p1 <-  ggplot(datamogrp,aes(x = origination_month, y = sumamt , fill = originatorname)) + geom_col() +
+  scale_fill_manual(values = palette[], name="Originators") +
+    labs(
+         x='Origination Month',
+         y='Auto ABS Origination Amount',
+         title='Monthly Originations') + export_theme +scale_x_date(labels = format_month()) +
+  scale_y_continuous(labels=format_si())
+
+p1
+
+```
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r cumulative_originations}
+p3 <- ggplot() +
+    geom_bar(data = origination, aes(x = origination_month, y = cumulative), stat = "identity", fill = palette[1]) +
+    scale_y_continuous(labels=format_si()) +
+    scale_x_date(labels = format_month(), breaks = break_vec_large, expand = c(0.01, 0.01)) +
+    scale_fill_manual(name='', values=palette, guide=FALSE) +
+    labs(
+         x='Origination Month',
+         y='Cumulative Originations to Date ($)',
+         title='Cumulative Originations by Month') +
+    export_theme
+
+p3
+
+sql <- paste0("
+select sum(originalloanamount) as original_balance, sum(subprime_bal) as subprime_bal, round(sum(obligorcreditscore * originalloanamount)/ sum(originalloanamount)) as WAVG_CreditScore, originatorname, count(*) as count from (select assetnumber, originalloanamount, originatorname,obligorcreditscore,originationdate, case when obligorcreditscore < 660 then originalloanamount end as subprime_bal,
+row_number() over (partition by assetnumber order by assetnumber, reportingperiodbeginningdate) as row_number
+from abs_auto_loans_test) as rows
+where row_number = 1 and originationdate between '", first_month_originations_to_show ,"' and '", report_month , "'
+group by originatorname
+")
+res <- dbSendQuery(con, sql)
+origination_prime <- fetch(res, -1)
+
+origination_prime$originatorname <- sapply(origination_prime$originatorname, origtolong)
+origination_prime$subprime_bal <- ifelse(is.na(origination_prime$subprime_bal)==TRUE, 0,origination_prime$subprime_bal) 
+origination_prime <- origination_prime %>% mutate(prime_bal=original_balance - subprime_bal)
+origination_prime$originatorname <- sapply(origination_prime$originatorname, origtolong)
+
+mdata <- melt(origination_prime[,c("subprime_bal","originatorname","prime_bal")], id=c("originatorname"))
+mdata$variable <- ifelse(mdata$variable=="subprime_bal","Subprime","Prime")
+
+p2 <-  ggplot(mdata,aes(x = originatorname, y = value, fill=variable)) +  geom_col() +
+       scale_fill_manual(values = palette[], name="Loan Type") +
+    labs(
+         x='Issuer',
+         y='Origination Volume ($)',
+         title='Total Origination Volume by Issuer') + export_theme +
+  scale_y_continuous(labels=format_si()) + coord_flip()
+
+p2
+
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+``` {r fico_term}
+sql <- paste0("
+SELECT case when obligorcreditscore <= 660 then '0-660'
+when obligorcreditscore > 660 and obligorcreditscore <= 680 then '661-680'
+when obligorcreditscore > 680 and obligorcreditscore <= 700 then '681-700'
+when obligorcreditscore > 700 and obligorcreditscore <= 740 then '701-740'
+when obligorcreditscore > 740 then '740+'
+end as fico, case when originalloanterm - graceperiodnumber <= 12 then '12'
+when originalloanterm - graceperiodnumber > 12 and originalloanterm - graceperiodnumber <= 24 then '24'
+when originalloanterm - graceperiodnumber > 24 and originalloanterm - graceperiodnumber <= 36 then '36'
+when originalloanterm - graceperiodnumber > 36 and originalloanterm - graceperiodnumber <= 48 then '48'
+when originalloanterm - graceperiodnumber > 48 and originalloanterm - graceperiodnumber <= 60 then '60'
+when originalloanterm - graceperiodnumber > 60 then '72' end as term, sum(reportingperiodbeginningloanbalanceamount) as balance
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '", report_month , "' and reportingperiodactualendbalanceamount > 0
+group by fico, term")
+res <- dbSendQuery(con, sql)
+carterms <- fetch(res, -1)
+carterms <- carterms[!is.na(carterms$fico),]
+
+
+cterm <- carterms %>%
+  group_by(fico) %>%
+    mutate(
+        percent = balance / sum(balance)
+    )
+
+ggplot(cterm, aes(x=fico, y=percent, fill = term)) + 
+    geom_col() +
+    labs(
+        title = "Loan Term Distribution by FICO Bucket"
+        , y = "% of Current Balance"
+        , x = "FICO Bucket")
+    )+
+    scale_y_continuous(labels = percent ) +
+    scale_fill_manual(name = 'Term (months)', values = palette[]) +
+    coord_flip() +
+    export_theme + theme(legend.position='bottom')
+
+
+sql <- paste0("
+SELECT obligorcreditscore, originalinterestratepercentage, reportingperiodbeginningdate, originatorname, originalloanamount
+from abs_auto_loans_test
+WHERE originalinterestratepercentage < 1 and obligorcreditscore > 0 and
+reportingperiodbeginningdate between '", report_prev , "' and '", report_month , "'
+")
+res <- dbSendQuery(con, sql)
+carintfico <- fetch(res, -1)
+
+carintfico$reportingperiodbeginningdate <- as.yearmon(carintfico$reportingperiodbeginningdate, "%y%m")
+
+cficoint <- carintfico %>%
+    mutate(
+          fico = ifelse(obligorcreditscore == 'No Score', NA, as.numeric(obligorcreditscore))
+        , fico = ifelse(fico > 850 | fico < 350, NA, fico)
+        , ficoband = cut(fico, breaks = seq(350,850,25))
+        , intrate = ifelse(originalinterestratepercentage < 1, originalinterestratepercentage, NA)
+    ) %>%
+    filter(!is.na(fico), !is.na(intrate))
+
+ggplot(cficoint, aes(x=ficoband, y=intrate)) +
+    facet_wrap(~reportingperiodbeginningdate) +
+    geom_violin(scale = 'width',fill = '#006c91') +
+    #geom_jitter(aes(color = originatorname), size = .1) +
+    labs(
+        title = "Auto Loan Interest Rate Distribution by Credit Score Band"
+        , y = "Annual Interest Rate %"
+        , x = "Credit Score Band"
+
+    )+
+    scale_y_continuous(labels = percent ) + 
+    export_theme +
+    theme(
+        axis.text.x = element_text(angle = 90,size=10)
+    )
+
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+``` {r distribution_fico}
+   cficoint$originatorname<- case_when(
+        cficoint$originatorname == "CBS" ~ "CarMax"
+        , cficoint$originatorname == "GM FINANCIAL" ~ "AmeriCredit"
+        , cficoint$originatorname == "HCA" ~ "Hyundai Auto"
+        , cficoint$originatorname == "Mechanics Bank" ~ "California Republic"
+        , cficoint$originatorname == "NMAC" ~ "Nissan Auto"
+        , cficoint$originatorname == "SC" ~ "Santander Drive Auto"
+        , cficoint$originatorname == "TMCC" ~ "Toyota Auto"
+        , cficoint$originatorname == "WORLD OMNI FINANCIAL CORP" ~ "World Omni Auto"
+        , cficoint$originatorname == "AHFC" ~ "Honda Auto"
+        , TRUE ~ trim(as.character(cficoint$originatorname))
+     )
+##### Other Chart
+ggplot(cficoint, aes(x=originatorname, y=fico, fill = originatorname)) + 
+    facet_wrap(~reportingperiodbeginningdate) +
+    geom_violin(draw_quantiles = c(.25,.5,.75)) +
+    labs(
+          title = "Borrower Credit Score Distribution by Originator"
+        , y = "Credit Score"
+        , x = "Originator Name"
+    )+
+    coord_flip() +
+      export_theme +
+    theme(
+        legend.position = 'none',
+        axis.text.y = element_text(size=8)
+    )
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r origination_credit}
+
+# Loan Amount & Principal Remaining by Origination Quarter and Issuer
+sql <- paste0("
+select sum(originalloanamount) as original_balance, originationdate as origination_month, count(*) as count,
+round(sum(obligorcreditscore * originalloanamount)/ sum(originalloanamount)) as WAVG_CreditScore,
+ sum(originalinterestratepercentage * reportingperiodbeginningloanbalanceamount)/ sum(reportingperiodbeginningloanbalanceamount) as WAC
+from (select assetnumber, originalloanamount, originationdate, obligorcreditscore, reportingperiodbeginningloanbalanceamount, originalinterestratepercentage,
+row_number() over (partition by assetnumber order by assetnumber, reportingperiodbeginningdate) as row_number
+from abs_auto_loans_test) as rows
+where row_number = 1 and originationdate between '", first_month_originations_to_show ,"' and '", report_month , "'
+group by origination_month
+")
+res <- dbSendQuery(con, sql)
+origination_credit <- fetch(res, -1)
+
+ggplot(origination_credit) +
+    geom_line(aes(x = origination_month, y = wavg_creditscore), color = palette[1]) +
+    geom_point(aes(x = origination_month, y = wavg_creditscore), size = 0.75) +
+    #scale_y_continuous(labels=percent) +
+    scale_x_date(labels = format_month(), breaks = break_vec_small, expand = c(0.01, 0.0)) +
+    labs(
+         x='Origination Month',
+         y='FICO',
+         title='FICO by Origination Month') +
+    export_theme
+
+origination_credit <- origination_credit[origination_credit$wac<1,]
+ggplot(origination_credit) +
+    geom_line(aes(x = origination_month, y = wac), color = palette[1]) +
+    geom_point(aes(x = origination_month, y = wac), size = 0.75) +
+    scale_y_continuous(labels=percent) +
+    scale_x_date(labels = format_month(), breaks = break_vec_small, expand = c(0.01, 0.0)) +
+    labs(
+         x='Origination Month',
+         y='Interest Rate',
+         title='Interest Rate by Origination Month') +
+    export_theme
+
+#ggsave('plots/cumulative_originations.png', plot = p3, scale = 1, height = 6, width = 10, units = 'in')
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r query_securitization_2, fig.height=12, fig.width=10}
+sql <- paste0(" select abs_name, count(*), sum(prepayment_bal) as prepayment_bal, sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60, 1-power(1-(sum(prepayment_bal)/(sum(outstanding_balance) - sum(schedule_prin))),12) as CPR,
+1-power((1-(sum(chargedoffprincipalamount)/sum(outstanding_balance))),12) as CDR,
+((1+((sum(actualinterestcollectedamount) + sum(repossessedproceedsamount) + sum(recoveredamount)-sum(chargedoffprincipalamount)) / sum(outstanding_balance)))^12)-1 as yield
+from (
+Select case when currentdelinquencystatus >= 60 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount,
+repossessedproceedsamount, recoveredamount
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '", report_month , "') as num
+group by abs_name")
+
+res <- dbSendQuery(con, sql)
+performance <- fetch(res, -1)
+performance$cdr<-percent(ifelse(is.na(performance$cdr)==TRUE,0,performance$cdr))
+performance$yield<-percent(ifelse(is.na(performance$yield)==TRUE,0,performance$yield))
+performance$cpr <- percent(performance$cpr)
+performance$delq_rate<-percent(ifelse(is.na(performance$delq_60/performance$outstanding_balance)==TRUE,0,performance$delq_60/performance$outstanding_balance))
+performance<-performance[,c("abs_name","delq_rate","cpr","cdr","yield")]
+
+sql <- paste0(" select abs_name, count(*), sum(prepayment_bal) as prepayment_bal, sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60_3, 1-power(1-(sum(prepayment_bal)/(sum(outstanding_balance) - sum(schedule_prin))),12) as CPR_3,
+1-power((1-(sum(chargedoffprincipalamount)/sum(outstanding_balance))),12) as CDR_3,
+((1+((sum(actualinterestcollectedamount) + sum(repossessedproceedsamount) + sum(recoveredamount)-sum(chargedoffprincipalamount)) / sum(outstanding_balance)))^12)-1 as yield_3
+from (
+Select case when currentdelinquencystatus >= 60 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount,
+repossessedproceedsamount, recoveredamount
+from abs_auto_loans_test
+where reportingperiodbeginningdate between '", report_3m , "' and '", report_month , "') as num
+group by abs_name")
+
+res <- dbSendQuery(con, sql)
+performance_3 <- fetch(res, -1)
+performance_3$cdr_3<-percent(ifelse(is.na(performance_3$cdr)==TRUE,0,performance_3$cdr))
+performance_3$yield_3<-percent(ifelse(is.na(performance_3$yield_3)==TRUE,0,performance_3$yield_3))
+performance_3$cpr_3 <- percent(performance_3$cpr)
+performance_3$delq_rate_3<-percent(ifelse(is.na(performance_3$delq_60/performance_3$outstanding_balance)==TRUE,0,performance_3$delq_60/performance_3$outstanding_balance))
+performance_3<-performance_3[,c("abs_name","delq_rate_3","cpr_3","cdr_3","yield_3")]
+
+sql <- paste0(" select abs_name, count(*), sum(prepayment_bal) as prepayment_bal, sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60_12, 1-power(1-(sum(prepayment_bal)/(sum(outstanding_balance) - sum(schedule_prin))),12) as CPR_12,
+1-power((1-(sum(chargedoffprincipalamount)/sum(outstanding_balance))),12) as CDR_12,
+((1+((sum(actualinterestcollectedamount) + sum(repossessedproceedsamount) + sum(recoveredamount)-sum(chargedoffprincipalamount)) / sum(outstanding_balance)))^12)-1 as yield_12
+from (
+Select case when currentdelinquencystatus >= 60 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount,
+repossessedproceedsamount, recoveredamount
+from abs_auto_loans_test
+where reportingperiodbeginningdate between '", report_ytd , "' and '", report_month , "') as num
+group by abs_name")
+
+res <- dbSendQuery(con, sql)
+performance_12 <- fetch(res, -1)
+performance_12$cdr_12<-percent(ifelse(is.na(performance_12$cdr_12)==TRUE,0,performance_12$cdr_12))
+performance_12$yield_12<-percent(ifelse(is.na(performance_12$yield_12)==TRUE,0,performance_12$yield_12))
+performance_12$cpr_12 <- percent(performance_12$cpr_12)
+performance_12$delq_rate_12<-percent(ifelse(is.na(performance_12$delq_60_12/performance_12$outstanding_balance)==TRUE,0,performance_12$delq_60_12/performance_12$outstanding_balance))
+performance_12<-performance_12[,c("abs_name","delq_rate_12","cpr_12","cdr_12","yield_12")]
+
+temp<-left_join(performance,performance_3,by="abs_name")
+final<-left_join(temp,performance_12,by="abs_name")
+
+names(final) <- c("Deal Name", "60+ Delq Rate", "CPR","CDR","Yield","60+ Delq Rate", "CPR","CDR","Yield","60+ Delq Rate", "CPR","CDR","Yield")
+
+kable(final, format = "latex", booktabs = T, caption = "Securtization Performance") %>%
+kable_styling(latex_options = c("striped", "scale_down"))%>%
+add_header_above(c(" " = 1, "1 Month" = 4, "3 Month" = 4, "12 Month" = 4))
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r performance_month}
+sql <- paste0(" select reportingperiodbeginningdate, count(*), sum(prepayment_bal) as prepayment_bal, sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60, 1-power(1-(sum(prepayment_bal)/(sum(outstanding_balance) - sum(schedule_prin))),12) as CPR,
+1-power((1-(sum(chargedoffprincipalamount)/sum(outstanding_balance))),12) as CDR,
+((1+((sum(actualinterestcollectedamount) + sum(repossessedproceedsamount) + sum(recoveredamount)-sum(chargedoffprincipalamount)) / sum(outstanding_balance)))^12)-1 as yield
+from (
+Select case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount, repossessedproceedsamount, recoveredamount
+from abs_auto_loans_test
+where reportingperiodbeginningdate between '", first_month , "' and '", report_month , "') as num
+group by reportingperiodbeginningdate")
+
+res <- dbSendQuery(con, sql)
+performance <- fetch(res, -1)
+performance$cdr<-ifelse(is.na(performance$cdr)==TRUE,0,performance$cdr)
+performance$delq_rate<-ifelse(is.na(performance$delq_60/performance$outstanding_balance)==TRUE,0,performance$delq_60/performance$outstanding_balance)
+
+ggplot(performance) +
+    geom_line(aes(x = reportingperiodbeginningdate, y = cpr), color = palette[1]) +
+    geom_point(aes(x = reportingperiodbeginningdate, y = cpr), size = 0.75) +
+    scale_y_continuous(labels=percent, limits = c(0,.25)) +
+    scale_x_date(labels = format_month(),expand = c(0.01, 0.0)) +
+    labs(
+         x='Performance Month',
+         y='Monthly CPR Rate (%)',
+         title='Monthly CPR Rate') +
+    export_theme
+
+ggplot(performance) +
+    geom_line(aes(x = reportingperiodbeginningdate, y = cdr), color = palette[1]) +
+    geom_point(aes(x = reportingperiodbeginningdate, y = cdr), size = 0.75) +
+    scale_y_continuous(labels=percent, limits = c(0,.1)) +
+   scale_x_date(labels = format_month(),expand = c(0.01, 0.0)) +
+    labs(
+         x='Performance Month',
+         y='Monthly CDR Rate (%)',
+         title='Monthly CDR Rate') +
+    export_theme
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r performance_month2}
+
+ggplot(performance) +
+    geom_line(aes(x = reportingperiodbeginningdate, y = delq_rate), color = palette[1]) +
+    geom_point(aes(x = reportingperiodbeginningdate, y = delq_rate), size = 0.75) +
+    scale_y_continuous(labels=percent, limits = c(0,.1))+
+    scale_x_date(labels = format_month(),expand = c(0.01, 0.0)) +
+    labs(
+         x='Performance Month',
+         y='Monthly 30 DPD+ Rate (%)',
+         title='Monthly Delinquency Rate') +
+    export_theme
+
+ggplot(performance) +
+    geom_line(aes(x = reportingperiodbeginningdate, y = yield), color = palette[1]) +
+    geom_point(aes(x = reportingperiodbeginningdate, y = yield), size = 0.75) +
+    scale_y_continuous(labels=percent, limits = c(0,.1))+
+    scale_x_date(labels = format_month(), expand = c(0.01, 0.0)) +
+    labs(
+         x='Performance Month',
+         y='Monthly Annualized Yield (%)',
+         title='Monthly Annualized Yield Return') +
+    export_theme
+
+```
+
+
+
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r Delinquency}
+#Months on book
+sql <- paste0(" select months_on_book, count(assetnumber) as count, sum(delq)/sum(outstanding) as delq_rate,
+(1+(sum(chargeoffs)/sum(outstanding)))^12-1 as CDR
+from
+(select 
+assetnumber,
+originalloanterm,
+originalloanterm - graceperiodnumber - remainingtermtomaturitynumber as months_on_book,
+case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq,
+chargedoffprincipalamount as chargeoffs,
+reportingperiodbeginningloanbalanceamount as outstanding
+from ABS_Auto_Loans_test
+WHERE originationdate <= '", report_month , "'and reportingperiodbeginningdate >='", first_month , "') t
+where months_on_book > 0
+group by months_on_book
+order by months_on_book
+")
+
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+delq<-delq[delq$count>1000,]
+delq<-delq[delq$months_on_book<=70,]
+
+p3 <- ggplot(delq) +
+    geom_line(aes(x =months_on_book, y =delq_rate)) +
+   # geom_point(aes(x = chargeoff_month, y = chargeoff_percent,colour = 'Total'), size = 0.75) +
+  scale_color_manual(name = 'Original Term', values = palette) +
+    scale_y_continuous(labels=percent) +
+    labs(
+         x='Month on Book',
+         y='30-DPD Rate (%)',
+         title='ABS Auto Delinquent Rate by Month on Book') +
+    export_theme + theme(legend.position='bottom')
+p3
+
+```
+
+```{r Delq_term}
+#####By Original Term
+sql <- paste0(" select months_on_book, count(assetnumber) as count, sum(delq)/sum(outstanding) as delq_rate,
+(1+(sum(chargeoffs)/sum(outstanding)))^12-1 as CDR,
+case  when term <= 36 then 36
+when term > 36 and term <= 48 then 48
+when term > 48 and term <= 60 then 60
+when term > 60 then 72
+end as original_term 
+from
+(select 
+assetnumber,
+originalloanterm - graceperiodnumber - remainingtermtomaturitynumber as months_on_book,
+case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq,
+chargedoffprincipalamount as chargeoffs,
+originalloanterm-graceperiodnumber as term,
+reportingperiodbeginningloanbalanceamount as outstanding
+from ABS_Auto_Loans_test
+WHERE originationdate <= '", report_month , "' and reportingperiodbeginningdate >='", first_month , "') t
+where months_on_book > 0
+group by months_on_book, original_term
+order by original_term, months_on_book
+")
+
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+delq<-delq[delq$count>1000,]
+delq<-delq[delq$months_on_book < delq$original_term,]
+delq$test <- as.character(delq$original_term)
+
+p3 <- ggplot(delq) +
+    geom_line(aes(x =months_on_book, y =delq_rate, color = factor(test),group=test)) +
+   # geom_point(aes(x = chargeoff_month, y = chargeoff_percent,colour = 'Total'), size = 0.75) +
+  scale_color_manual(name = 'Original Term', values = palette) +
+    scale_y_continuous(labels=percent) +
+    labs(
+         x='Month on Book',
+         y='30-DPD Rate (%)',
+         title='ABS Auto Delinquent Rate by Original Term and Months on Book') +
+    export_theme + theme(legend.position='bottom')
+p3
+
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r Current_delq}
+#delinquency
+sql<-"
+SELECT reportingperiodbeginningdate, currentdelinquencystatus, sum(reportingperiodactualendbalanceamount) as outprin
+from abs_auto_loans_test
+group by reportingperiodbeginningdate, currentdelinquencystatus
+"
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+
+delq$currentdelinquencystatus <- ifelse(is.na(delq$currentdelinquencystatus), 0, delq$currentdelinquencystatus)
+delq$status <- cut(delq$currentdelinquencystatus, breaks=c(0,30,60,90,120,Inf), include.lowest = TRUE, right = FALSE)
+delq$status <- sapply(delq$status,delqstatus)
+delq$status <- factor(delq$status, levels = c('Current', '30-59 DPD', '60-89 DPD', '90-119 DPD', '120 DPD+'))
+
+
+delqgrp <- delq %>% group_by(reportingperiodbeginningdate,status) %>% summarise(sumbal = sum(outprin, na.rm = TRUE)) %>%
+    mutate(
+        pct = sumbal / sum(sumbal, na.rm = TRUE)
+    )
+    
+ggplot(delqgrp[delqgrp$status != "Current",], 
+       aes(x=reportingperiodbeginningdate, y=pct, fill=status)) +
+    geom_col() +
+    scale_y_continuous(labels= percent, breaks = seq(0,.1,.005)) +
+    #scale_fill_discrete(name = "Days Past Due") + 
+    scale_fill_manual(values = palette, name="Days Past Due") +
+    scale_x_date(labels = format_month()) +
+    labs(
+          title = "Delinquent Auto Loans as Percentage of Total Outstanding Receivables"
+        , x = "Reporting Month"
+        , y = "Unpaid Balance %") +
+    export_theme + theme(legend.position='bottom')
+
+sql<-"
+SELECT reportingperiodbeginningdate, currentdelinquencystatus, sum(reportingperiodactualendbalanceamount) as outprin,
+case when obligorcreditscore < 660 then 'subprime' else 'prime' end as segment
+from abs_auto_loans_test
+group by reportingperiodbeginningdate, currentdelinquencystatus, segment
+"
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+
+delq$currentdelinquencystatus <- ifelse(is.na(delq$currentdelinquencystatus), 0, delq$currentdelinquencystatus)
+delq$status <- cut(delq$currentdelinquencystatus, breaks=c(0,30,60,90,120,Inf), include.lowest = TRUE, right = FALSE)
+delq$status <- sapply(delq$status,delqstatus)
+delq$segment <- ifelse(delq$segment=='prime','PRIME','SUBPRIME')
+delq$status <- factor(delq$status, levels = c('Current', '30-59 DPD', '60-89 DPD', '90-119 DPD', '120 DPD+'))
+
+delqficogrp <- delq %>%
+    group_by(reportingperiodbeginningdate, segment, status) %>%
+    summarise(
+        sumbal = sum(outprin)
+    ) %>%
+    mutate(
+        pct = sumbal / sum(sumbal)
+    ) %>% filter(is.na(reportingperiodbeginningdate)==FALSE)
+
+
+ggplot(delqficogrp[delqficogrp$status != "Current",], 
+       aes(x=reportingperiodbeginningdate, y=pct, fill=status)) +
+    geom_col() +
+    scale_y_continuous(labels= percent, breaks = seq(0,.1,.01)) +
+    #scale_fill_discrete(name = "Days Past Due") + 
+    scale_fill_manual(values = palette, name="Days Past Due") +
+    scale_x_date(labels = format_month()) +
+    labs(
+          title = "Delinquent Auto Loans as Percentage of Total Outstanding Receivables"
+        , x = "Reporting Month"
+        , y = "Unpaid Balance %") +
+    export_theme + theme(legend.position='bottom') + facet_wrap(~segment)
+
+
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r delq}
+#modifications
+#delinquency
+sql<-paste0("
+SELECT abs_name, currentdelinquencystatus, sum(reportingperiodactualendbalanceamount) as outprin
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '",report_month,"'
+group by abs_name, currentdelinquencystatus
+")
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+
+delq$currentdelinquencystatus <- ifelse(is.na(delq$currentdelinquencystatus), 0, delq$currentdelinquencystatus)
+delq$status <- cut(delq$currentdelinquencystatus, breaks=c(0,30,60,90,120,Inf), include.lowest = TRUE, right = FALSE)
+delq$status <- sapply(delq$status,delqstatus)
+delq$status <- factor(delq$status, levels = c('Current', '30-59 DPD', '60-89 DPD', '90-119 DPD', '120 DPD+'))
+
+
+delqgrp <- delq %>% group_by(abs_name,status) %>% summarise(sumbal = sum(outprin, na.rm = TRUE)) %>%
+    mutate(
+        pct = sumbal / sum(sumbal, na.rm = TRUE)
+    )
+    
+ggplot(delqgrp[delqgrp$status != "Current",], 
+       aes(x=abs_name, y=pct, fill=status)) +
+    geom_col() +
+    scale_y_continuous(labels= percent, breaks = seq(0,.1,.01)) +
+    scale_fill_manual(name = "Days Past Due", values = palette) +
+    labs(
+          title = "Delinquent Auto Loans as Percentage of Total Outstanding Receivables"
+        , x = "Reporting Month"
+        , y = "Unpaid Balance %") +
+    export_theme + theme(legend.position='bottom') + coord_flip() 
+
+```
+
+```{r Modifications}
+#modifications
+sql <-paste0("
+Select originalloanamount, abs_name, modificationTypeCode  from
+(SELECT Distinct assetnumber, abs_name, originalloanamount
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '",report_month,"' ) as data
+Left Outer Join
+(SELECT assetnumber, modificationTypeCode
+from abs_auto_loans_test
+WHERE modificationTypeCode != ' ' ) as mod
+on data.assetnumber = mod.assetnumber
+")
+res <- dbSendQuery(con, sql)
+mods <- fetch(res, -1)
+
+mods$mod <- ifelse(is.na(mods$modificationtypecode), 'Un-Modified', 'Modified')
+
+modgrp <- mods %>%
+    group_by(abs_name, mod) %>%
+    summarize(
+        sumbal = sum(originalloanamount, na.rm = TRUE )
+         ) %>%
+    mutate(
+        pctbal = sumbal / sum(sumbal)
+    )
+
+ggplot(modgrp[modgrp$mod == 'Modified',], aes(x=abs_name, y=pctbal, fill = mod)) + geom_col() +
+  scale_y_continuous(labels= percent, breaks=seq(0,1,.1)) +
+    #scale_fill_discrete(name = "Modified") + #scale_x_date(labels = format_month()) +
+    scale_fill_manual(values = palette) +
+    labs(
+          title = "Percentage of Modified Loans per Deal"
+        , x = "ABS Deals"
+        , y = "Original Balance %")  +
+   export_theme + theme(legend.position='none') + theme(axis.text.y = element_text(size=8)) +coord_flip()
+  
+
+
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r Delq_state, fig.height = 5}
+sql <- paste0(" select state, month, count(*), sum(prepayment_bal) as prepayment_bal, sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60, 1-power(1-(sum(prepayment_bal)/(sum(outstanding_balance) - sum(schedule_prin))),12) as CPR,
+1-power((1-(sum(chargedoffprincipalamount)/sum(outstanding_balance))),12) as CDR,
+((1+((sum(actualinterestcollectedamount) + sum(repossessedproceedsamount) + sum(recoveredamount)-sum(chargedoffprincipalamount)) / sum(outstanding_balance)))^12)-1 as yield
+from (
+Select case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount, repossessedproceedsamount, recoveredamount, obligorgeographiclocation as state, reportingperiodbeginningdate as month
+from abs_auto_loans_test
+where reportingperiodbeginningdate between '", report_prev , "' and '", report_month , "') as num
+group by state, month")
+
+res <- dbSendQuery(con, sql)
+state <- fetch(res, -1)
+state <- state%>%filter(count > 150)
+state$cdr<-ifelse(is.na(state$cdr)==TRUE,0,state$cdr)
+state$delq_rate<-ifelse(is.na(state$delq_60/state$outstanding_balance)==TRUE,0,state$delq_60/state$outstanding_balance)
+
+roll_map<-state
+roll_map$state <- sapply(roll_map$state, get_state_name)
+map_shapes <- map_data('state')
+map_data <- merge(map_shapes, roll_map, by.x = "region", by.y = "state", all.x=TRUE)
+map_data$month <- format(map_data$month,"%b-%y")
+
+ ggplot(map_data) +
+   geom_polygon(aes(fill = delq_rate, x = long, y = lat, group=group), color = 'white') +
+   scale_fill_distiller(name = '30+ DPD Rate', trans = 'reverse', labels=percent) +
+   facet_wrap(~month) +
+   guides(fill = guide_colorbar(reverse = T, barheight = 1, barwidth = 10, ticks = F)) +
+   coord_map(projection="albers", lat0 = 30, lat1 = 40) +
+   theme(axis.line = element_blank(), 
+         axis.text.x = element_blank(), 
+         axis.text.y = element_blank(), 
+         axis.ticks = element_blank(), 
+         axis.title.x = element_blank(), 
+         axis.title.y = element_blank(), 
+         panel.background = element_blank(), 
+         panel.border = element_blank(), 
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank(), 
+         plot.background = element_blank(),
+         legend.position="bottom", legend.box = "horizontal",
+         strip.background = element_blank(),strip.text = element_text(size=14))+
+       labs(title="Monthly 30+ DPD Rate by State")
+ 
+   ggplot(map_data) +
+   geom_polygon(aes(fill = cdr, x = long, y = lat, group=group), color = 'white') +
+     scale_fill_distiller(name = 'CDR', trans = 'reverse', labels=percent) +
+   facet_wrap(~month) +
+   guides(fill = guide_colorbar(reverse = T, barheight = 1, barwidth = 10, ticks = F)) +
+   coord_map(projection="albers", lat0 = 30, lat1 = 40) +
+   theme(axis.line = element_blank(), 
+         axis.text.x = element_blank(), 
+         axis.text.y = element_blank(), 
+         axis.ticks = element_blank(), 
+         axis.title.x = element_blank(), 
+         axis.title.y = element_blank(), 
+         panel.background = element_blank(), 
+         panel.border = element_blank(), 
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank(), 
+         plot.background = element_blank(),
+         legend.position="bottom", legend.box = "horizontal",
+         strip.background = element_blank(),strip.text = element_text(size=14))+
+       labs(title="1 Month CDR by State")
+ 
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+``` {r state_stats}
+  ggplot(map_data) +
+   geom_polygon(aes(fill = cpr, x = long, y = lat, group=group), color = 'white') +
+     scale_fill_distiller(name = 'CPR', trans = 'reverse', labels=percent) +
+   facet_wrap(~month) +
+   guides(fill = guide_colorbar(reverse = T, barheight = 1, barwidth = 10, ticks = F)) +
+   coord_map(projection="albers", lat0 = 30, lat1 = 40) +
+   theme(axis.line = element_blank(), 
+         axis.text.x = element_blank(), 
+         axis.text.y = element_blank(), 
+         axis.ticks = element_blank(), 
+         axis.title.x = element_blank(), 
+         axis.title.y = element_blank(), 
+         panel.background = element_blank(), 
+         panel.border = element_blank(), 
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank(), 
+         plot.background = element_blank(),
+         legend.position="bottom", legend.box = "horizontal",
+         strip.background = element_blank(),strip.text = element_text(size=14))+
+       labs(title="1 Month CPR by State")
+ 
+  
+  sql <- paste0("select count(*) as Num_Loans, round(sum(reportingperiodbeginningloanbalanceamount)) as outstanding_balance,sum(originalinterestratepercentage * reportingperiodbeginningloanbalanceamount)/ sum(reportingperiodbeginningloanbalanceamount) as WAC, obligorgeographiclocation as state
+from abs_auto_loans_test
+where reportingperiodbeginningdate = '", report_month , "' and reportingperiodactualendbalanceamount > 0
+group by state
+")
+res <- dbSendQuery(con, sql)
+origination_map <- fetch(res, -1)
+origination_map <- origination_map%>%filter(num_loans > 150)
+
+roll_map<-origination_map
+roll_map$state <- sapply(roll_map$state, get_state_name)
+map_shapes <- map_data('state')
+map_data <- merge(map_shapes, roll_map, by.x = "region", by.y = "state", all.x=TRUE)
+map_data$month <- format(map_data$month,"%b-%y")
+ 
+  ggplot(map_data) +
+   geom_polygon(aes(fill = wac, x = long, y = lat, group=group), color = 'white') +
+     scale_fill_distiller(name = 'Interest Rate', trans = 'reverse', labels=percent) +
+   #facet_wrap(~month) +
+   guides(fill = guide_colorbar(reverse = T, barheight = 1, barwidth = 10, ticks = F)) +
+   coord_map(projection="albers", lat0 = 30, lat1 = 40) +
+   theme(axis.line = element_blank(), 
+         axis.text.x = element_blank(), 
+         axis.text.y = element_blank(), 
+         axis.ticks = element_blank(), 
+         axis.title.x = element_blank(), 
+         axis.title.y = element_blank(), 
+         panel.background = element_blank(), 
+         panel.border = element_blank(), 
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank(), 
+         plot.background = element_blank(),
+         legend.position="bottom", legend.box = "horizontal",
+         strip.background = element_blank(),strip.text = element_text(size=14))+
+       labs(title="WAVG Interest Rate for Outstanding Loans")  
+
+```
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r Delq_state_chg}
+
+mdata <- melt(state[,c("delq_rate","state","month")], id=c("month","state"))
+mdata <- cast(mdata, state ~ month)
+date1 <- colnames(mdata)[2]
+date2 <- colnames(mdata)[3]
+colnames(mdata)[2] <- "old_month"
+colnames(mdata)[3] <- "new_month"
+mdata <- mdata[mdata$state != '',]
+
+
+g<-ggplot(data=mdata,
+           aes(x=new_month, y=new_month-old_month,label=paste(" ",state," "),
+                 color=ifelse(old_month < new_month,"Decreasing\n(Month over Month Change)","Increasing\n(Month over Month Change)" )))+
+  geom_text_repel(segment.colour = "black", show.legend=NULL)+
+  geom_point()+
+  geom_hline(yintercept=0,linetype=2,color="black")+
+  scale_color_manual(values=c("#4575b4","#d73027"),name="Roll Rate")+
+  theme_ipsum() +
+  theme(legend.position="top")+
+    labs(
+         x=paste0(date1," 30+ DPD Rate (%)"),
+         y="Month over Month Change (%)",
+         title="Changes in 30+ DPD Rate",
+         subtitle=paste0('From ',date1,' to ',date2))+
+  scale_y_continuous(labels=percent)+
+  scale_x_continuous(labels=percent)
+  
+  
+
+g
+ 
+  
+
+```
+
+```{r vehicle_performance, include=F}
+# sql <- paste0(" select count(*) as count,vehiclemanufacturername,sum(outstanding_balance) as outstanding_balance, sum(chargedoffprincipalamount) as charge_off, sum(delq_60) as delq_60, sum(schedule_prin) as schedule_prin,
+# sum(prepayment_bal) as prepay
+# from (
+# Select case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq_60, case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal, case when reportingperiodbeginningdate is null then zerobalanceeffectivedate else reportingperiodbeginningdate end, reportingperiodbeginningloanbalanceamount as outstanding_balance, abs_name, case when chargedoffprincipalamount < 0 then 0 else chargedoffprincipalamount end, reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin, actualinterestcollectedamount, repossessedproceedsamount, recoveredamount,vehiclemanufacturername
+# from abs_auto_loans_test
+# where reportingperiodbeginningdate between '", report_ytd , "' and '", report_month , "') as num
+# group by vehiclemanufacturername")
+# 
+# res <- dbSendQuery(con, sql)
+# performance_vehicle <- fetch(res, -1)
+# 
+# performance_vehicle$goodname <- sapply(toupper(trim(performance_vehicle$vehiclemanufacturername)), getGoodCarName)
+# 
+# final <- performance_vehicle %>% group_by(goodname) %>% summarise(delq = sum(delq_60),
+#             prepay = sum(prepay),
+#             charge_off = sum(charge_off),
+#             schedule_prin = sum(schedule_prin),
+#             balance = sum(outstanding_balance),
+#             num_loans = sum(count))  %>% filter(num_loans>1000)
+
+
+```
+
+
+
+
+``` {r fico_term_data, include=F}
+#####By Original Term
+sql <- paste0(" select reportingperiodbeginningdate, count(assetnumber) as count, sum(delq)/sum(outstanding) as delq_rate,
+(1+(sum(chargeoffs)/sum(outstanding)))^12-1 as CDR,
+1-power(1-(sum(prepayment_bal)/(sum(outstanding) - sum(schedule_prin))),12) as CPR,
+case  when term <= 36 then 36
+when term > 36 and term <= 48 then 48
+when term > 48 and term <= 60 then 60
+when term > 60 then 72
+end as original_term,
+case when obligorcreditscore <= 660 then '0-660'
+when obligorcreditscore > 660 and obligorcreditscore <= 700 then '661-700'
+when obligorcreditscore > 700 and obligorcreditscore <= 740 then '701-740'
+when obligorcreditscore > 740 then '740+'
+end as fico_bucket
+from
+(select 
+assetnumber,
+reportingperiodbeginningdate,
+originalloanterm - graceperiodnumber - remainingtermtomaturitynumber as months_on_book,
+case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq,
+chargedoffprincipalamount as chargeoffs, obligorcreditscore,
+case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal,
+reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin,
+originalloanterm-graceperiodnumber as term,
+reportingperiodbeginningloanbalanceamount as outstanding
+from ABS_Auto_Loans_test
+WHERE originationdate <= '", report_month , "' and reportingperiodbeginningdate >='", first_month , "') t
+where months_on_book > 6
+group by reportingperiodbeginningdate, original_term, fico_bucket
+order by original_term, reportingperiodbeginningdate, fico_bucket
+")
+
+res <- dbSendQuery(con, sql)
+delq <- fetch(res, -1)
+delq$fico_bucket <- ifelse(is.na(delq$fico_bucket)==TRUE,'No Score',delq$fico_bucket)
+
+  p1 <- ggplot() + 
+      geom_line(data = delq, aes(x=reportingperiodbeginningdate, y = delq_rate), color = palette[1]) + 
+      facet_wrap(~fico_bucket) +
+      #scale_y_continuous(labels = label_format) +
+      scale_x_date(labels = format_month(),expand = c(0.01, 0.0)) +
+      scale_fill_manual(name='', values=palette, guide=FALSE) + 
+      labs(
+           x='Performance Month',
+           y='Delq Rate',
+           title='Performance by Month') + 
+      export_theme
+
+  p1
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+``` {r cumulative_co}
+#####By Original Term
+sql <- paste0(" select count(assetnumber) as count, sum(delq)/sum(outstanding) as delq_rate,
+(1+(sum(chargeoffs)/sum(outstanding)))^12-1 as CDR,
+1-power(1-(sum(prepayment_bal)/(sum(outstanding) - sum(schedule_prin))),12) as CPR,
+sum(prepayment_bal) as prepay,
+sum(outstanding) as beginning_balance,
+sum(chargeoffs) as charge_off_amount,
+months_on_book,
+case when obligorcreditscore <= 660 then '0-660'
+when obligorcreditscore > 660 and obligorcreditscore <= 700 then '661-700'
+when obligorcreditscore > 700 and obligorcreditscore <= 740 then '701-740'
+when obligorcreditscore > 740 then '740+'
+end as fico_bucket
+from
+(select 
+assetnumber,
+reportingperiodbeginningdate,
+originalloanterm - graceperiodnumber - remainingtermtomaturitynumber as months_on_book,
+case when currentdelinquencystatus >= 30 then reportingperiodbeginningloanbalanceamount end as delq,
+chargedoffprincipalamount as chargeoffs, obligorcreditscore,
+case when totalactualamountpaid-nextreportingperiodpaymentamountdue > 0 then totalactualamountpaid - nextreportingperiodpaymentamountdue end as prepayment_bal,
+reportingperiodscheduledpaymentamount - scheduledprincipalamount as schedule_prin,
+originalloanterm-graceperiodnumber as term,
+reportingperiodbeginningloanbalanceamount as outstanding
+from ABS_Auto_Loans_test
+where originationdate <= '", report_month , "' and reportingperiodbeginningdate >='", first_month , "') t
+--where months_on_book between 0 and '",num_month,"'
+group by months_on_book, fico_bucket
+order by months_on_book, fico_bucket
+")  
+
+res <- dbSendQuery(con, sql)
+cumul_data <- fetch(res, -1)
+cumul_data$fico_bucket <- ifelse(is.na(cumul_data$fico_bucket)==TRUE,'No Score',cumul_data$fico_bucket)
+#cumul_data<-cumul_data[cumul_data$charge_off_amount > 0,] 
+
+curves <- cumul_data %>% 
+  group_by(fico_bucket) %>% 
+  filter(fico_bucket!='No Score') %>%           # Remove series with missing FICO scores
+  filter(count > 2000) %>%  # Remove series with fewer than 1000 loans
+  filter(months_on_book > 0) %>%     # Eliminate cycles_on_book == 0, which is inconsistently populated
+  filter(months_on_book < 72) %>%   # May need updating
+  mutate(original_balance = max(beginning_balance),
+         cum_prepay = cumsum(prepay) / original_balance,
+         cum_co = cumsum(charge_off_amount) / original_balance) %>%
+  #select(-num_loans) %>%             # Not needed for further calculations
+  arrange(fico_bucket)
+
+  
+p3 <- ggplot(curves) +
+    geom_line(aes(x =months_on_book, y =cum_prepay, color = factor(fico_bucket),group=fico_bucket)) +
+   # geom_point(aes(x = chargeoff_month, y = chargeoff_percent,colour = 'Total'), size = 0.75) +
+  scale_color_manual(name = 'Original Term', values = palette) +
+    scale_y_continuous(labels=percent) +
+    labs(
+         x='Month on Book',
+         y='Culmulative Prepayment Rate',
+         title='Culmulative Prepayment Rate by FICO') +
+    export_theme + theme(legend.position='bottom')
+p3
+
+p3 <- ggplot(curves) +
+    geom_line(aes(x =months_on_book, y =cum_co, color = factor(fico_bucket),group=fico_bucket)) +
+   # geom_point(aes(x = chargeoff_month, y = chargeoff_percent,colour = 'Total'), size = 0.75) +
+  scale_color_manual(name = 'Original Term', values = palette) +
+    scale_y_continuous(labels=percent) +
+    labs(
+         x='Month on Book',
+         y='Culmulative Charged-off Rate',
+         title='Culmulative Charged-off Rate by FICO') +
+    export_theme + theme(legend.position='bottom')
+p3
+```
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+
+### Author
+Nicholas Del Zingaro  
+
