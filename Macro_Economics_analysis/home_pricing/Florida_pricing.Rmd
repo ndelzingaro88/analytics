@@ -1,0 +1,319 @@
+---
+output: 
+    pdf_document:
+        keep_tex: true
+        fig_caption: true
+header-includes:
+    \usepackage{graphicx}
+    \usepackage{geometry}
+    \geometry{
+        right  = 0.25in,
+        left   = 0.25in,
+        top    = 0.75in,
+        bottom = 0.75in
+    }
+    \usepackage{fancyhdr}
+    \usepackage{lastpage}
+    \usepackage{changepage}
+    \usepackage[default]{lato}
+    \usepackage[none]{hyphenat}
+    \usepackage[T1]{fontenc}
+    \usepackage{color}
+    \usepackage{xcolor}
+    \usepackage{enumitem}
+    \renewcommand*{\familydefault}{\sfdefault}
+    \definecolor{orchardgreen}{HTML}{00945e}
+---
+\newcommand{\reportcategory}{Florida Home Pricing}
+\newcommand{\reportdate}{Data from FHFA}
+
+\fancypagestyle{firstpage}{
+    \setlength{\headheight}{35pt}
+    \newcommand\headline{\rule[.5cm] {12.4cm}{.4pt}\hfill}
+    \newcommand\footline{\hrule height .4pt\hfill}
+    \renewcommand\headrule{\vskip-15px\headline\vskip7px\headline}
+    \renewcommand\footrule{\footline\vskip10px}
+    \renewcommand{\headrulewidth}{3pt}
+    \setlength{\marginparwidth}{5pt}
+    \fancyfoot{}
+    \fancyhead[L]{
+        \large 
+            {\includegraphics[height = 11px]{~/git_dir/analytics/Macro_Economics_analysis/home_pricing/florida_flag.png}}
+            {\hspace{10px}\fontsize{9pt}{8pt}\selectfont\fontseries{l} {\color{orchardgreen}{\reportcategory{}}}}
+            \\{\vspace{12px}\fontsize{20pt}{16pt}\selectfont\fontseries{l} \fontsize{20pt}{16pt}{\hspace{5px}\selectfont\fontseries{bx} \reportdate{}}} 
+            \\{\vspace{10px}\fontsize{7pt}{7pt}\selectfont\fontseries{b} \frontpagenote{}}
+    }
+ 
+    \lfoot{\raisebox{16px}{\includegraphics[height = 8px]{~/git_dir/analytics/Macro_Economics_analysis/home_pricing/fsu_logo.png}}}
+    \rfoot{\raisebox{15px}{\small{Page \thepage\ of \pageref*{LastPage}}}}
+  
+}
+
+\fancypagestyle{contentpage}{
+    \setlength{\headheight}{20pt}
+    \newcommand\hrulethick{\hrule height .8pt\hfill}
+    \newcommand\hrulethin{\hrule height .4pt\hfill}
+    \renewcommand\headrule{\vskip-16px\hrulethick\vskip20px\hrulethin}
+    \renewcommand\footrule{\hrulethin\vskip3px}
+    \fancyfoot{}
+    \lhead{
+        \raisebox{-12px}{\includegraphics[height = 10px]{~/git_dir/analytics/Macro_Economics_analysis/home_pricing/florida_flag.png}
+        {\hspace{10px}\fontsize{9pt}{8pt}\selectfont\fontseries{l}} {\color{orchardgreen}{\reportcategory{}}}}
+    }
+    \rhead{\raisebox{-12px}{\reportdate{}}}
+    \lfoot{\raisebox{2px}{\includegraphics[height = 8px]{~/git_dir/analytics/Macro_Economics_analysis/home_pricing/fsu_logo.png}}}
+    \rfoot{\raisebox{1px}{\small{Page \thepage\ of \pageref*{LastPage}}}}
+}
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=10, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE, error=FALSE)
+
+options(device = function(file, width, height) {
+  svg(tempfile(), width = width, height = height)
+})
+```
+
+
+```{r setup}
+rm(list=ls())
+
+library(tidyquant)
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(ggridges)
+library(extrafont)
+library(dplyr)
+library(ggplot2)
+library(hrbrthemes)
+#if(!require("animation")) install.packages('animation')
+library(devtools)
+#install_github("yihui/animation")
+library(animation)
+library(tweenr)
+
+
+# TODO: These should all move to a separate package
+export_theme <- theme_ipsum() +
+      theme(text=element_text(family="Lato"),
+            panel.background = element_blank(),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.grid.major.y = element_line(color='#999999'),
+            plot.title = element_text(size=15),
+            axis.title = element_text(size=14),
+            axis.text = element_text(size=12),
+            axis.text.x = element_text(angle = 0, vjust = .5),
+            axis.line = element_blank(),
+            legend.text=element_text(size=12))
+
+orchard_palette <- c('#006c91', '#222222', '#848484','#990033', '#ff9900', '#660066', '#8b572a', '#e00e7c', '#4fcbe5', '#8a76d4', '#7ed321', '#d7bf1e', '#5891d4', '#d48758', '#e36e74')
+
+format_si <- function(...) {
+  function(x) {
+    limits <- c(1e-9,  1e-6,  1e-3,  1e0,   1e3,
+                1e6,   1e9,   1e12,  1e15,  1e18,
+                1e21,  1e24)
+    prefix <- c("n",   "µ",   "m",   " ",   "K",
+                "MM",   "B",   "T",   "P",   "E",
+                "Z",   "Y")
+  
+    # Vector with array indices according to position in intervals
+    i <- findInterval(abs(x), limits)
+  
+    # Set prefix to " " for very small values < 1e-24
+    i <- ifelse(i==0, which(limits == 1e0), i)
+
+    paste(format(round(x/limits[i], 1),
+                 trim=TRUE, scientific=FALSE, ...),
+          prefix[i], sep = '')
+  }
+}
+
+
+format_month <- function(...) {
+  function(x) {
+    paste(month(x),"'",substr(year(x), 3, 4), sep = '')
+  }
+}
+
+format_quarter <- function(...) {
+  function(x) {
+    paste('Q', quarter(x)," ",substr(year(x),3,4), sep = '')
+  }
+}
+
+get_state_name <- function(x) {
+  if(x %in% state.abb) {
+    to_return <- tolower(state.name[grep(x, state.abb)])
+  } else if (x %in% state.name) {
+    to_return <- tolower(x)
+  } else if (x == 'DC') {
+    to_return <- 'district of columbia'
+  } else if (x == 'US') {
+    to_return <- 'United States'
+  } else {
+    to_return <- 'Invalid State Name'
+  }
+  to_return
+}
+
+```
+
+```{r excel_setup}
+suppressMessages(  {
+  
+# Get house price data ----
+
+df.hpi<-fread("https://www.fhfa.gov/DataTools/Downloads/Documents/HPI/HPI_master.csv")
+
+df.hpi <- mutate(df.hpi,date=as.Date(ISOdate(yr,period*3,1)))
+
+df.hpi <- df.hpi %>% group_by(level,place_name) %>% mutate(hpa=index_sa/lag(index_sa)-1,
+                                                           hpa4 = index_sa/lag(index_sa,4)-1) %>% ungroup()
+
+# list of CA index
+# use grepl("CA",unique(df.hpi$place_name)) to find California
+
+df.ca <- filter(df.hpi,grepl("FL",place_name)| place_name=="Florida" , hpi_type=="traditional", hpi_flavor=="purchase-only")
+
+df.us <- filter(df.hpi, place_name=="United States", hpi_type=="traditional",hpi_flavor=="purchase-only", frequency=="quarterly")
+
+
+
+})
+```
+
+\
+
+<!-- CONTENT BEGINS HERE --> 
+\thispagestyle{firstpage}
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r query_securitization_1, fig.height=6}
+ggplot(data= df.ca %>% filter(level=="State"), aes(x=date,y=index_sa,group=place_name))+
+  geom_line(color=rgb(103,180,75, maxColorValue = 256), size=1.05)+
+  geom_text(data=. %>% tail(1), aes(label="FL"),color=rgb(103,180,75, maxColorValue = 256),fontface="bold",nudge_y=5)+
+  geom_line(data=df.us %>% select(date,index_sa), aes(group="FL"),linetype=2, color=rgb(9, 177,240, maxColorValue = 256),size=1.05)+
+  geom_text(data=df.us %>% select(date,index_sa) %>% tail(1), aes(group="FL",label="US"),nudge_y=-5, color=rgb(9, 177,240, maxColorValue = 256))+
+  #theme_ridges(font_family="Roboto")+
+  theme(text = element_text(color = "#27408b"))+
+  labs(y="House Price Index: 1991Q1=100",x="date",
+       title="House price index: FL vs US"
+       #caption="@lenkiefer Source: FHFA purchase-only house price index, SA"
+       )
+```
+
+&nbsp;
+```{r loanlevel, fig.height=6}
+ggplot(data= df.ca %>% filter(level=="State",year(date)>1991), aes(x=date,y=hpa4,group=place_name))+
+  geom_line(color=rgb(103,180,75, maxColorValue = 256), size=1.05)+
+  geom_text(data=. %>% tail(1), aes(label="FL"),color=rgb(103,180,75, maxColorValue = 256),fontface="bold",nudge_y=.01)+
+  geom_line(data=filter(df.us,year(date)>1991) %>% select(date,hpa4), aes(group="FL"),linetype=2, color=rgb(9, 177,240, maxColorValue = 256),size=1.05)+
+  geom_text(data=df.us %>% select(date,hpa4) %>% tail(1), aes(group="FL",label="US"),nudge_y=-.01, color=rgb(9, 177,240, maxColorValue = 256))+
+  #theme_ridges(font_family="Roboto")+
+  scale_y_continuous(labels=scales::percent)+
+  theme(text = element_text(color = "#27408b"))+
+  labs(y="4-quarter % change",x="date",
+       title="House price appreciation: FL vs US",
+       subtitle="4-quarter percent change in index"
+       #caption="@lenkiefer Source: FHFA purchase-only house price index, SA"
+       )
+```
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r AccoutLevel}
+ggplot(data= df.ca %>% filter(level=="MSA",year(date)>1991), aes(x=date,y=index_sa,group=place_name))+
+  geom_line(color=rgb(103,180,75, maxColorValue = 256), size=1.05)+
+  geom_line(data=df.ca %>% filter(level=="State",year(date)>1991) %>% select(date,index_sa), aes(group="FL"),linetype=2, color=rgb(9, 177,240, maxColorValue = 256),size=1.05)+
+ # theme_ridges(font_family="Roboto")+
+  theme(text = element_text(color = "#27408b"),strip.text=element_text(size=7))+
+    labs(y="House Price Index: 1991Q1=100",x="date",
+       title="House price index", subtitle="Solid line metro, dotted line FL"
+       #caption="@lenkiefer Source: FHFA purchase-only house price index, SA"
+       )+
+  facet_wrap(~place_name,ncol=3)
+```
+
+&nbsp;
+
+```{r MonthsOffer, fig.height=5}
+df.ca$place_name <- str_wrap(df.ca$place_name, width = 35)
+ggplot(data=filter(df.ca,date==max(df.ca$date)), aes(x=forcats::fct_reorder(place_name,hpa4),y=hpa4,color=level))+
+  scale_color_manual(name="Level", values=c(rgb(103,180,75, maxColorValue = 256),rgb(9, 177,240, maxColorValue = 256) ))+
+  geom_segment(aes(yend=0,xend=place_name))+
+  geom_point(size=3)+
+  coord_flip()+scale_y_continuous(labels=scales::percent, expand=c(0,0.001),limits=c(0,.175))+
+  geom_text(aes(label=scales::percent(round(hpa4,3))), hjust=0,nudge_y=0.0035)+
+ # theme_ridges(font_family="Roboto")+
+    theme(text = element_text(color = "#27408b"),legend.position="bottom")+
+  labs(y="4-quarter % change",x="Area",
+       title="House price appreciation: 2018Q1",
+       subtitle="4-quarter percent change in index"
+      # caption="@lenkiefer Source: FHFA purchase-only house price index, SA"
+       )
+```
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+```{r MonthsOffer2}
+
+
+dfp <- filter(df.ca,level=="State",year(date)>1991) %>% select(date,hpa4) %>% mutate(day=1+(row_number()-1)*7, ease="linear", rate_label=as.factor(as.character(round(hpa4,0))))
+
+plot_data_tween<-tween_elements(dfp, time = "day",  group="ease",
+                                ease="ease", nframes = nrow(dfp)*2)
+df_tween_appear <- tween_appear(plot_data_tween, time='day', nframes = nrow(dfp)*2)
+
+
+make_plot_appear <- function(i){
+  p <-
+    ggplot(data=df_tween_appear, aes(x=date,y=hpa4))+
+    geom_area(data= .%>% filter(.frame==i, .age> -3.5), color=NA, fill=rgb(9, 177,240, maxColorValue = 256),alpha=0.15 ) +
+    geom_line(alpha=0)+
+    geom_hline(yintercept=0, linetype=2)+
+    geom_line(data= .%>% filter(.frame==i, .age> -3.5) ) +
+    geom_point(data=  .%>% filter(.frame==i, .age> -3.5) %>% tail(1), color=rgb(103,180,75, maxColorValue = 256), size=3, alpha=0.5)+
+    #theme_ridges(font_family="Roboto")+
+        scale_y_continuous(labels=scales::percent, sec.axis=dup_axis())+
+    theme(text = element_text(color = "#27408b"))+
+    labs(y="House Price Appreciation (y/y %)",x="date (quarterly)",
+         title="House price appreciation: Florida",
+         subtitle="4-quarter percent change in index"
+         #caption="@lenkiefer Source: FHFA purchase-only house price index, SA"
+         )
+  
+  return(p)
+}
+
+make_plot_appear(max(df_tween_appear$.frame))
+```
+
+
+\newpage
+\thispagestyle{contentpage}
+\fontsize{8pt}{12pt}\selectfont\fontseries{l}
+
+```{r query_originations}
+# oopt<-ani.options(interval=1/20)
+# saveGIF({for (i in 1:max(df_tween_appear$.frame)){
+#   g<-
+#     make_plot_appear(i) + 
+#     geom_hline(yintercept=0, linetype=2)
+#   print(g)
+#   print(paste(i,"out of",max(df_tween_appear$.frame)))
+#   ani.pause()
+# }
+#   for (ii in 1:2){
+#     print(g)
+#     ani.pause()
+#   }
+#   
+# }, movie.name = "~/git_dir/analytics/Macro_Economics_analysis/FL_Pricing/hpa.gif", ani.width=700, ani.height=600,scale=1.2)  #set YOURDIRECTORY to where you want to save the file
+```
